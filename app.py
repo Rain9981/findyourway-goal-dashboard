@@ -1,5 +1,11 @@
 # ✅ Main launcher for the Goal Dashboard (Homepage)
 import streamlit as st
+st.image("logo2Find_You_Way.png", width=250)
+
+import streamlit as st
+st.image("logo2Find_You_Way.png", width=250)
+
+import streamlit as st
 
 st.set_page_config(page_title='🎯 AI Goal Setting Dashboard', layout='wide')
 
