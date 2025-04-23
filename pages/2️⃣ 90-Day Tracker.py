@@ -1,9 +1,8 @@
 # ✅ Import path fix for backend folder
-import streamlit as st
 st.image("logo2Find_You_Way.png", width=250)
+import streamlit as st
 
 import streamlit as st
-st.image("logo2Find_You_Way.png", width=250)
 
 import sys
 import os
