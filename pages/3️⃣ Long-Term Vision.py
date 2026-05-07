@@ -13,12 +13,40 @@ import datetime
 import io
 import json
 import textwrap
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 
 def clean_json(content):
     return content.replace("```json", "").replace("```", "").strip()
+
+
+def read_latest_sheet_row(tab_name):
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = json.loads(st.secrets["google_sheets"]["service_account"])
+        credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds, scope)
+        client_gsheets = gspread.authorize(credentials)
+        sheet = client_gsheets.open_by_key(st.secrets["google_sheets"]["sheet_id"])
+        worksheet = sheet.worksheet(tab_name)
+
+        values = worksheet.get_all_values()
+
+        if len(values) < 2:
+            return {}
+
+        headers = values[0]
+        last_row = values[-1]
+
+        return {
+            headers[i]: last_row[i] if i < len(last_row) else ""
+            for i in range(len(headers))
+        }
+
+    except Exception:
+        return {}
 
 
 def pdf_lines(pdf, text, x, y, width=95, line_height=14):
@@ -37,8 +65,8 @@ def pdf_lines(pdf, text, x, y, width=95, line_height=14):
 def build_fallback_vision(goal):
     return {
         "one_year": f"Within 1 year, build strong momentum toward: {goal}",
-        "three_year": f"Within 3 years, expand this goal into a stable system with stronger habits, structure, and measurable progress.",
-        "five_year": f"Within 5 years, turn this vision into a mature lifestyle, business, or personal achievement with lasting impact.",
+        "three_year": "Within 3 years, expand this goal into a stable system with stronger habits, structure, and measurable progress.",
+        "five_year": "Within 5 years, turn this vision into a mature lifestyle, business, or personal achievement with lasting impact.",
         "future_self": "You made it because you stopped treating the goal like an idea and started treating it like a commitment. You built structure, followed through week by week, adjusted when needed, and became the type of person who could sustain the vision."
     }
 
@@ -56,10 +84,10 @@ def run():
 **What this tab does:**
 - builds a 1-year, 3-year, and 5-year vision
 - creates a future-self message
-- can pull from SMART Goal or 90-Day Goal if those were entered during this session
+- pulls from SMART Goal or 90-Day Goal when available
 
 **Important:**
-If you refreshed the app or opened this page first, session data from SMART/90-Day may not exist yet. In that case, use Custom Input.
+Session data resets after refresh. If session data is gone, this tab tries to pull the latest saved data from Google Sheets.
 """)
 
     goal_source = st.selectbox(
@@ -68,22 +96,32 @@ If you refreshed the app or opened this page first, session data from SMART/90-D
         key="vision_goal_source"
     )
 
-    smart_goal = st.session_state.get("specific", "")
-    ninety_day_goal = st.session_state.get("goal_input", "")
+    smart_sheet = read_latest_sheet_row("SMART Goal Planner")
+    tracker_sheet = read_latest_sheet_row("90-Day Tracker")
+
+    smart_goal = (
+        st.session_state.get("specific", "")
+        or smart_sheet.get("Specific", "")
+    )
+
+    ninety_day_goal = (
+        st.session_state.get("goal_input", "")
+        or tracker_sheet.get("Goal Description", "")
+    )
 
     if goal_source == "SMART Goal":
         if smart_goal:
             st.session_state["vision_input"] = smart_goal
-            st.success("SMART Goal found from this session.")
+            st.success("SMART Goal found.")
         else:
-            st.warning("No SMART Goal found in this session. Enter a custom goal below or return to SMART Goal Planner first.")
+            st.warning("No SMART Goal found yet. Use Custom Input or save your SMART Goal first.")
 
     elif goal_source == "90-Day Goal":
         if ninety_day_goal:
             st.session_state["vision_input"] = ninety_day_goal
-            st.success("90-Day Goal found from this session.")
+            st.success("90-Day Goal found.")
         else:
-            st.warning("No 90-Day Goal found in this session. Enter a custom goal below or return to 90-Day Tracker first.")
+            st.warning("No 90-Day Goal found yet. Use Custom Input or save your 90-Day plan first.")
 
     vision_input = st.text_area(
         "Main Vision Goal",
@@ -146,10 +184,12 @@ Rules:
                         st.warning("GPT did not return clean JSON. Using fallback structure.")
                         data = build_fallback_vision(vision_input)
 
-                    st.session_state["one_year"] = data.get("one_year") or build_fallback_vision(vision_input)["one_year"]
-                    st.session_state["three_year"] = data.get("three_year") or build_fallback_vision(vision_input)["three_year"]
-                    st.session_state["five_year"] = data.get("five_year") or build_fallback_vision(vision_input)["five_year"]
-                    st.session_state["future_self"] = data.get("future_self") or build_fallback_vision(vision_input)["future_self"]
+                    fallback = build_fallback_vision(vision_input)
+
+                    st.session_state["one_year"] = data.get("one_year") or fallback["one_year"]
+                    st.session_state["three_year"] = data.get("three_year") or fallback["three_year"]
+                    st.session_state["five_year"] = data.get("five_year") or fallback["five_year"]
+                    st.session_state["future_self"] = data.get("future_self") or fallback["future_self"]
 
                     st.success("✅ Vision goals and reflection filled successfully.")
                     st.rerun()
@@ -195,7 +235,12 @@ Rules:
         y = pdf_lines(pdf, f"Message from Future Self:\n{future_self}", 50, y)
 
         pdf.save()
-        st.download_button("📥 Download Vision PDF", data=buffer.getvalue(), file_name="long_term_vision_v2.pdf")
+
+        st.download_button(
+            "📥 Download Vision PDF",
+            data=buffer.getvalue(),
+            file_name="long_term_vision_v2.pdf"
+        )
 
 
 if __name__ == "__main__":

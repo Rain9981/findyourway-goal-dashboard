@@ -13,22 +13,29 @@ from openai import OpenAI
 client_ai = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 
-def read_data(tab_name):
+def read_latest_sheet_row(tab_name):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = json.loads(st.secrets["google_sheets"]["service_account"])
         credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds, scope)
-        client = gspread.authorize(credentials)
-
-        sheet_id = st.secrets["google_sheets"]["sheet_id"]
-        sheet = client.open_by_key(sheet_id)
-
+        client_gsheets = gspread.authorize(credentials)
+        sheet = client_gsheets.open_by_key(st.secrets["google_sheets"]["sheet_id"])
         worksheet = sheet.worksheet(tab_name)
-        data = worksheet.get_all_records()
-        return data[-1] if data else {}
 
-    except Exception as e:
-        st.warning(f"Could not load `{tab_name}` from Google Sheets. Using session data if available.")
+        values = worksheet.get_all_values()
+
+        if len(values) < 2:
+            return {}
+
+        headers = values[0]
+        last_row = values[-1]
+
+        return {
+            headers[i]: last_row[i] if i < len(last_row) else ""
+            for i in range(len(headers))
+        }
+
+    except Exception:
         return {}
 
 
@@ -53,14 +60,14 @@ def run():
 - shows SMART, 90-day, vision, and reflection summaries
 - avoids crashing if Sheets are unavailable
 
-**If Sheets do not load:**
-Check that the service account has access to the Google Sheet and the sheet ID is correct.
+**Important:**
+Session data resets when the app/browser resets. Saved Google Sheets data is the permanent fallback.
 """)
 
-    smart_data = read_data("SMART Goal Planner")
-    tracker_data = read_data("90-Day Tracker")
-    vision_data = read_data("Long-Term Vision")
-    reflection_data = read_data("Reflection & Insight")
+    smart_data = read_latest_sheet_row("SMART Goal Planner")
+    tracker_data = read_latest_sheet_row("90-Day Tracker")
+    vision_data = read_latest_sheet_row("Long-Term Vision")
+    reflection_data = read_latest_sheet_row("Reflection & Insight")
 
     st.subheader("🎯 SMART Goal Summary")
 
@@ -77,13 +84,20 @@ Check that the service account has access to the Google Sheet and the sheet ID i
     st.markdown(f"**Time-Bound:** {smart_time_bound}")
 
     if smart_data.get("Goal Score"):
-        st.info(f"**Goal Score:** {smart_data.get('Goal Score')} | **Readiness:** {smart_data.get('Execution Readiness', '...')}")
+        st.info(
+            f"**Goal Score:** {smart_data.get('Goal Score')} | "
+            f"**Readiness:** {smart_data.get('Execution Readiness', '...')}"
+        )
 
     st.divider()
 
     st.subheader("📅 90-Day Action Tracker")
 
-    goal_description = get_value("goal_input", tracker_data, "Goal Description")
+    goal_description = (
+        st.session_state.get("goal_input", "")
+        or tracker_data.get("Goal Description", "...")
+    )
+
     st.markdown(f"**Goal:** {goal_description}")
 
     completed_weeks = 0
@@ -91,6 +105,7 @@ Check that the service account has access to the Google Sheet and the sheet ID i
     for i in range(1, 13):
         session_done = st.session_state.get(f"week_{i}_done", False)
         sheet_done = str(tracker_data.get(f"Week {i} Complete", "")).lower() in ["true", "yes", "1"]
+
         if session_done or sheet_done:
             completed_weeks += 1
 
@@ -108,10 +123,18 @@ Check that the service account has access to the Google Sheet and the sheet ID i
 
     with st.expander("View all 12 weeks", expanded=True):
         for i in range(1, 13):
-            week_value = st.session_state.get(f"week_{i}", "") or tracker_data.get(f"Week {i}", "...")
-            done_value = st.session_state.get(f"week_{i}_done", False) or str(tracker_data.get(f"Week {i} Complete", "")).lower() in ["true", "yes", "1"]
+            week_value = (
+                st.session_state.get(f"week_{i}", "")
+                or tracker_data.get(f"Week {i}", "...")
+            )
+
+            done_value = (
+                st.session_state.get(f"week_{i}_done", False)
+                or str(tracker_data.get(f"Week {i} Complete", "")).lower() in ["true", "yes", "1"]
+            )
 
             status = "✅ Complete" if done_value else "⬜ Not Complete"
+
             st.markdown(f"**Week {i}: {status}**")
             st.markdown(week_value if week_value else "...")
 
@@ -123,11 +146,30 @@ Check that the service account has access to the Google Sheet and the sheet ID i
 
     st.subheader("🚀 Long-Term Vision Overview")
 
-    vision_source = vision_data.get("Source Goal", st.session_state.get("vision_input", "..."))
-    one_year = st.session_state.get("one_year", "") or vision_data.get("1-Year", "...")
-    three_year = st.session_state.get("three_year", "") or vision_data.get("3-Year", "...")
-    five_year = st.session_state.get("five_year", "") or vision_data.get("5-Year", "...")
-    future_self = st.session_state.get("future_self", "") or vision_data.get("Future Self", "")
+    vision_source = (
+        st.session_state.get("vision_input", "")
+        or vision_data.get("Source Goal", "...")
+    )
+
+    one_year = (
+        st.session_state.get("one_year", "")
+        or vision_data.get("1-Year", "...")
+    )
+
+    three_year = (
+        st.session_state.get("three_year", "")
+        or vision_data.get("3-Year", "...")
+    )
+
+    five_year = (
+        st.session_state.get("five_year", "")
+        or vision_data.get("5-Year", "...")
+    )
+
+    future_self = (
+        st.session_state.get("future_self", "")
+        or vision_data.get("Future Self", "")
+    )
 
     st.markdown(f"**Source Goal:** {vision_source}")
     st.markdown(f"**1-Year Goal:** {one_year}")
@@ -142,10 +184,25 @@ Check that the service account has access to the Google Sheet and the sheet ID i
 
     st.subheader("🧠 Latest Reflection & Insight")
 
-    reflection = st.session_state.get("journal", "") or reflection_data.get("Reflection", "...")
-    insight = st.session_state.get("insight", "") or reflection_data.get("Insight", "...")
-    reframe = st.session_state.get("reframe", "") or reflection_data.get("Reframe", "...")
-    next_action = st.session_state.get("next_action", "") or reflection_data.get("Next Action", "...")
+    reflection = (
+        st.session_state.get("journal", "")
+        or reflection_data.get("Reflection", "...")
+    )
+
+    insight = (
+        st.session_state.get("insight", "")
+        or reflection_data.get("Insight", "...")
+    )
+
+    reframe = (
+        st.session_state.get("reframe", "")
+        or reflection_data.get("Reframe", "...")
+    )
+
+    next_action = (
+        st.session_state.get("next_action", "")
+        or reflection_data.get("Next Action", "...")
+    )
 
     st.markdown(f"**Reflection:** {reflection}")
     st.markdown(f"**Insight:** {insight}")
@@ -188,6 +245,7 @@ Time-Bound: {smart_time_bound}
 {completed_weeks}/12 weeks complete, {progress_percent}%
 
 Long-Term Vision:
+Source Goal: {vision_source}
 1-Year: {one_year}
 3-Year: {three_year}
 5-Year: {five_year}
@@ -234,10 +292,13 @@ Return:
 
     with col1:
         st.page_link("pages/1️⃣ SMART Goal Planner.py", label="Edit SMART Goal")
+
     with col2:
         st.page_link("pages/2️⃣ 90-Day Tracker.py", label="Edit 90-Day Plan")
+
     with col3:
         st.page_link("pages/3️⃣ Long-Term Vision.py", label="Edit Vision")
+
     with col4:
         st.page_link("pages/4️⃣ Reflection & Insight.py", label="Reflect Again")
 
