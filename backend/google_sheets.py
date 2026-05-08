@@ -5,9 +5,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 import streamlit as st
 
 
-SYSTEM_HEADERS = ["Timestamp", "Role"]
-
-
 def get_sheet():
     scope = [
         "https://spreadsheets.google.com/feeds",
@@ -21,19 +18,13 @@ def get_sheet():
     return client.open_by_key(st.secrets["google_sheets"]["sheet_id"])
 
 
-def _is_real_header_row(row, required_headers):
+def _row_has_real_headers(row):
     if not row:
         return False
-    return all(h in row for h in SYSTEM_HEADERS) and any(
-        h in row for h in required_headers if h not in SYSTEM_HEADERS
-    )
 
+    clean_row = [str(cell).strip() for cell in row]
 
-def _find_header_row_index(values, required_headers):
-    for index, row in enumerate(values, start=1):
-        if _is_real_header_row(row, required_headers):
-            return index
-    return None
+    return "Timestamp" in clean_row and "Role" in clean_row
 
 
 def save_data(role, data_dict, sheet_tab=None):
@@ -43,12 +34,21 @@ def save_data(role, data_dict, sheet_tab=None):
     try:
         worksheet = sheet.worksheet(sheet_tab)
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = sheet.add_worksheet(title=sheet_tab, rows="1000", cols="100")
+        worksheet = sheet.add_worksheet(
+            title=sheet_tab,
+            rows="1000",
+            cols="100"
+        )
 
-    required_headers = SYSTEM_HEADERS + list(data_dict.keys())
+    required_headers = ["Timestamp", "Role"] + list(data_dict.keys())
     values = worksheet.get_all_values()
 
-    header_row_index = _find_header_row_index(values, required_headers)
+    header_row_index = None
+
+    for idx, row in enumerate(values, start=1):
+        if _row_has_real_headers(row):
+            header_row_index = idx
+            break
 
     if not values:
         worksheet.append_row(required_headers)
@@ -57,19 +57,26 @@ def save_data(role, data_dict, sheet_tab=None):
     elif header_row_index is None:
         worksheet.insert_row(required_headers, index=1)
         headers = required_headers
-        header_row_index = 1
 
     else:
         headers = values[header_row_index - 1]
-        missing_headers = [h for h in required_headers if h not in headers]
+
+        missing_headers = [
+            header for header in required_headers
+            if header not in headers
+        ]
+
         if missing_headers:
             headers = headers + missing_headers
-            worksheet.update(f"{header_row_index}:{header_row_index}", [headers])
+            worksheet.update(
+                f"{header_row_index}:{header_row_index}",
+                [headers]
+            )
 
     row_data = {
         "Timestamp": str(datetime.datetime.now()),
         "Role": role,
-        **{k: str(v) for k, v in data_dict.items()},
+        **{key: str(value) for key, value in data_dict.items()}
     }
 
     row = [row_data.get(header, "") for header in headers]
