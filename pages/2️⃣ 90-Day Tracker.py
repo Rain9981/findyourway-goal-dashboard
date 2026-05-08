@@ -336,7 +336,8 @@ Return:
     st.markdown("### ✅ Recommended Next Step")
     st.info("Next: Go to **Long-Term Vision** to connect this 90-day plan to your 1-year, 3-year, and 5-year path.")
 
-    if st.button("✅ Save to Google Sheets"):
+   if st.button("✅ Save to Google Sheets"):
+    try:
         completed_weeks = sum(
             1 for i in range(1, 13)
             if st.session_state.get(f"week_{i}_done", False)
@@ -354,6 +355,9 @@ Return:
         }, sheet_tab="90-Day Tracker")
 
         st.success("Saved to Google Sheets ✅")
+
+    except Exception as e:
+        st.error(f"Google Sheets save failed: {e}")
 
     if st.button("📄 Export as PDF"):
         buffer = io.BytesIO()
