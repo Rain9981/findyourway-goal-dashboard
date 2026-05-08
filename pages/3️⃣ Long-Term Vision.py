@@ -16,6 +16,7 @@ import textwrap
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 
@@ -23,29 +24,60 @@ def clean_json(content):
     return content.replace("```json", "").replace("```", "").strip()
 
 
-def read_latest_sheet_row(tab_name):
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = json.loads(st.secrets["google_sheets"]["service_account"])
-        credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds, scope)
-        client_gsheets = gspread.authorize(credentials)
-        sheet = client_gsheets.open_by_key(st.secrets["google_sheets"]["sheet_id"])
-        worksheet = sheet.worksheet(tab_name)
+def get_google_sheet():
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
 
+    creds = json.loads(st.secrets["google_sheets"]["service_account"])
+    credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds, scope)
+    client_gsheets = gspread.authorize(credentials)
+
+    return client_gsheets.open_by_key(st.secrets["google_sheets"]["sheet_id"])
+
+
+def read_latest_sheet_row(tab_name, required_column=None):
+    try:
+        sheet = get_google_sheet()
+        worksheet = sheet.worksheet(tab_name)
         values = worksheet.get_all_values()
 
         if len(values) < 2:
             return {}
 
-        headers = values[0]
-        last_row = values[-1]
+        header_index = None
+
+        for idx, row in enumerate(values):
+            has_timestamp_role = "Timestamp" in row and "Role" in row
+            has_required_column = required_column and required_column in row
+
+            if has_timestamp_role or has_required_column:
+                header_index = idx
+                break
+
+        if header_index is None:
+            return {}
+
+        headers = values[header_index]
+
+        data_rows = [
+            row for row in values[header_index + 1:]
+            if any(str(cell).strip() for cell in row)
+        ]
+
+        if not data_rows:
+            return {}
+
+        last_row = data_rows[-1]
 
         return {
             headers[i]: last_row[i] if i < len(last_row) else ""
             for i in range(len(headers))
         }
 
-    except Exception:
+    except Exception as e:
+        st.sidebar.warning(f"Could not read {tab_name}: {e}")
         return {}
 
 
@@ -87,17 +119,18 @@ def run():
 - pulls from SMART Goal or 90-Day Goal when available
 
 **Important:**
-Session data resets after refresh. If session data is gone, this tab tries to pull the latest saved data from Google Sheets.
+If session data resets, this tab now searches Google Sheets for the real header row instead of assuming row 1 is correct.
 """)
 
-    goal_source = st.selectbox(
-        "Source of your main goal",
-        ["Custom Input", "SMART Goal", "90-Day Goal"],
-        key="vision_goal_source"
+    smart_sheet = read_latest_sheet_row(
+        "SMART Goal Planner",
+        required_column="Specific"
     )
 
-    smart_sheet = read_latest_sheet_row("SMART Goal Planner")
-    tracker_sheet = read_latest_sheet_row("90-Day Tracker")
+    tracker_sheet = read_latest_sheet_row(
+        "90-Day Tracker",
+        required_column="Goal Description"
+    )
 
     smart_goal = (
         st.session_state.get("specific", "")
@@ -109,19 +142,25 @@ Session data resets after refresh. If session data is gone, this tab tries to pu
         or tracker_sheet.get("Goal Description", "")
     )
 
+    goal_source = st.selectbox(
+        "Source of your main goal",
+        ["Custom Input", "SMART Goal", "90-Day Goal"],
+        key="vision_goal_source"
+    )
+
     if goal_source == "SMART Goal":
         if smart_goal:
             st.session_state["vision_input"] = smart_goal
-            st.success("SMART Goal found.")
+            st.success("✅ SMART Goal found and loaded.")
         else:
-            st.warning("No SMART Goal found yet. Use Custom Input or save your SMART Goal first.")
+            st.warning("No SMART Goal found yet. Save your SMART Goal first or use Custom Input.")
 
     elif goal_source == "90-Day Goal":
         if ninety_day_goal:
             st.session_state["vision_input"] = ninety_day_goal
-            st.success("90-Day Goal found.")
+            st.success("✅ 90-Day Goal found and loaded.")
         else:
-            st.warning("No 90-Day Goal found yet. Use Custom Input or save your 90-Day plan first.")
+            st.warning("No 90-Day Goal found yet. Save your 90-Day plan first or use Custom Input.")
 
     vision_input = st.text_area(
         "Main Vision Goal",
@@ -207,14 +246,18 @@ Rules:
 
     if st.button("✅ Save to Google Sheets"):
         try:
-            save_data("Long-Term Vision", {
-                "Source Goal": vision_input,
-                "1-Year": one_year,
-                "3-Year": three_year,
-                "5-Year": five_year,
-                "Future Self": future_self,
-                "Date": str(datetime.date.today())
-            }, sheet_tab="Long-Term Vision")
+            save_data(
+                "Long-Term Vision",
+                {
+                    "Source Goal": vision_input,
+                    "1-Year": one_year,
+                    "3-Year": three_year,
+                    "5-Year": five_year,
+                    "Future Self": future_self,
+                    "Date": str(datetime.date.today())
+                },
+                sheet_tab="Long-Term Vision"
+            )
             st.success("Saved to Google Sheets ✅")
         except Exception as e:
             st.warning(f"Could not save to Google Sheets: {e}")
